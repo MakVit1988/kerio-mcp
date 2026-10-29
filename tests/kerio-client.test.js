@@ -158,3 +158,70 @@ describe('text extraction', () => {
     expect(extractText(mail)).toBe('plain\nhtml');
   });
 });
+
+describe('KerioClient files', () => {
+  const json = body => ({ headers: { getSetCookie: () => [] }, ok: true, json: async () => body });
+
+  function filesClient(handler) {
+    const calls = [];
+    const fetchImpl = jest.fn(async (url, init) => {
+      calls.push({ url, init });
+      return handler(url, init, calls.length);
+    });
+    return { client: new KerioClient({ host: 'mail.example.com', user: 'u@example.com', password: 'x', fetchImpl }), calls };
+  }
+
+  const login = () => ({ headers: { getSetCookie: () => ['SESSION_CONNECT_WEBMAIL=c; Path=/'] }, json: async () => ({ result: { token: 't' } }) });
+
+  test('uploadFile posts multipart to the upload endpoint with token and cookie', async () => {
+    const { client, calls } = filesClient((url, init, n) => (n === 1 ? login() : json({ result: { fileUpload: { id: 'f1', length: 3, name: 'x' } } })));
+    const result = await run(client.uploadFile({ name: 'проба.txt', data: Buffer.from('abc'), contentType: 'text/plain' }));
+    expect(result.id).toBe('f1');
+    expect(calls[1].url).toBe('https://mail.example.com/webmail/api/jsonrpc/upload/');
+    expect(calls[1].init.method).toBe('POST');
+    expect(calls[1].init.headers['X-Token']).toBe('t');
+    expect(calls[1].init.headers.Cookie).toBe('SESSION_CONNECT_WEBMAIL=c');
+    const file = calls[1].init.body.get('file');
+    expect(file.name).toBe('проба.txt');
+    expect(file.size).toBe(3);
+  });
+
+  test('uploadFile logs in again once when the session expired', async () => {
+    const { client, calls } = filesClient((url, init, n) => {
+      if (n === 1 || n === 3) return login();
+      return n === 2 ? json({ error: { code: -32001, message: 'expired' } }) : json({ result: { fileUpload: { id: 'f2' } } });
+    });
+    const result = await run(client.uploadFile({ name: 'a.bin', data: Buffer.from('a') }));
+    expect(result.id).toBe('f2');
+    expect(calls).toHaveLength(4);
+  });
+
+  test('createDraft uploads attachments and references them by id', async () => {
+    const bodies = [];
+    const { client } = filesClient((url, init, n) => {
+      if (n === 1) return login();
+      if (url.endsWith('/upload/')) return json({ result: { fileUpload: { id: 'up1' } } });
+      const body = JSON.parse(init.body);
+      bodies.push(body);
+      if (body.method === 'Folders.get') return json({ result: { list: [{ id: 'F-DRAFTS', name: 'Drafts', type: 'FMail' }] } });
+      return json({ result: { errors: [], result: [{ id: 'D1' }] } });
+    });
+    await run(client.createDraft({ to: ['a@b.c'], subject: 's', body: 'b', attachments: [{ name: 'a.pdf', data: Buffer.from('x'), contentType: 'application/pdf' }] }));
+    const create = bodies.find(b => b.method === 'Mails.create');
+    expect(create.params.mails[0].attachments).toEqual([{ id: 'up1', name: 'a.pdf', contentType: 'application/pdf' }]);
+  });
+
+  test('downloadAttachment returns the bytes and honours the size limit', async () => {
+    const { client, calls } = filesClient((url, init, n) =>
+      (n === 1 ? login() : { headers: { getSetCookie: () => [] }, ok: true, arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer }));
+    const bytes = await run(client.downloadAttachment({ name: 'a', url: '/webmail/api/download/attachment/x?sid=1', size: 3 }));
+    expect([...bytes]).toEqual([1, 2, 3]);
+    expect(calls[1].url).toBe('https://mail.example.com/webmail/api/download/attachment/x?sid=1');
+    await expect(client.downloadAttachment({ name: 'big', url: '/u', size: 100 }, { maxBytes: 10 })).rejects.toThrow(/limit/);
+  });
+
+  test('downloadAttachment reports an HTTP error', async () => {
+    const { client } = filesClient((url, init, n) => (n === 1 ? login() : { headers: { getSetCookie: () => [] }, ok: false, status: 403 }));
+    await expect(run(client.downloadAttachment({ name: 'a', url: '/u', size: 1 }))).rejects.toThrow(/HTTP 403/);
+  });
+});

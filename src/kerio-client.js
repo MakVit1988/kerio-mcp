@@ -64,28 +64,93 @@ class KerioClient {
     }
   }
 
-  async post(method, params, { retries = 3 } = {}) {
+  authHeaders() {
+    return {
+      ...(this.token ? { 'X-Token': this.token } : {}),
+      ...(this.cookies.size ? { Cookie: this.cookieHeader() } : {})
+    };
+  }
+
+  /**
+   * One HTTP request with timeout and retries on network errors.
+   * `read` turns the Response into the value to return, inside the retry loop.
+   */
+  async http(url, makeInit, read, { retries = 3, timeoutMs = this.timeoutMs } = {}) {
     let lastError;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const response = await this.fetch(this.url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json-rpc',
-            ...(this.token ? { 'X-Token': this.token } : {}),
-            ...(this.cookies.size ? { Cookie: this.cookieHeader() } : {})
-          },
-          body: JSON.stringify({ jsonrpc: '2.0', id: ++this.requestId, method, params }),
-          signal: AbortSignal.timeout(this.timeoutMs)
-        });
+        const response = await this.fetch(url, { ...makeInit(), signal: AbortSignal.timeout(timeoutMs) });
         this.storeCookies(response);
-        return await response.json();
+        return await read(response);
       } catch (error) {
         lastError = error;
+        if (error instanceof KerioError) throw error;
         if (attempt < retries) await new Promise(r => setTimeout(r, 1000 * 2 ** attempt));
       }
     }
     throw new KerioError(`Kerio is not reachable: ${lastError && lastError.message}`);
+  }
+
+  post(method, params, options) {
+    return this.http(
+      this.url,
+      () => ({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json-rpc', ...this.authHeaders() },
+        body: JSON.stringify({ jsonrpc: '2.0', id: ++this.requestId, method, params })
+      }),
+      response => response.json(),
+      options
+    );
+  }
+
+  // ---- files -----------------------------------------------------------
+
+  /**
+   * Uploads a file so it can be attached to a mail (the returned id is valid for about an hour).
+   * @param {{name: string, data: Buffer|Uint8Array, contentType?: string}} file
+   * @returns {Promise<{id: string, name: string, length: number}>}
+   */
+  async uploadFile({ name, data, contentType = 'application/octet-stream' }) {
+    if (!this.token) await this.login();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const json = await this.http(
+        `${this.url}upload/`,
+        () => {
+          const form = new FormData();
+          form.append('file', new Blob([data], { type: contentType }), name);
+          return { method: 'POST', headers: this.authHeaders(), body: form };
+        },
+        response => response.json(),
+        { timeoutMs: this.timeoutMs * 4 }
+      );
+      if (json.error && json.error.code === -32001 && attempt === 0) {
+        await this.login();
+        continue;
+      }
+      if (json.error) throw new KerioError(`Upload failed: ${json.error.message}`, json.error.code);
+      const uploaded = json.result && json.result.fileUpload;
+      if (!uploaded || !uploaded.id) throw new KerioError('Upload failed: no file id in response');
+      return uploaded;
+    }
+  }
+
+  /** Downloads an attachment of a mail (an object from mail.attachments) and returns its bytes. */
+  async downloadAttachment(attachment, { maxBytes = Infinity } = {}) {
+    if (!attachment || !attachment.url) throw new KerioError('Attachment has no download url');
+    if (attachment.size > maxBytes) {
+      throw new KerioError(`Attachment ${attachment.name} is ${attachment.size} bytes, the limit is ${maxBytes}`);
+    }
+    if (!this.token) await this.login();
+    return this.http(
+      `https://${this.host}${attachment.url}`,
+      () => ({ method: 'GET', headers: this.authHeaders() }),
+      async response => {
+        if (!response.ok) throw new KerioError(`Download failed: HTTP ${response.status}`);
+        return Buffer.from(await response.arrayBuffer());
+      },
+      { timeoutMs: this.timeoutMs * 4 }
+    );
   }
 
   async login() {
@@ -245,9 +310,18 @@ class KerioClient {
     }
   }
 
-  async createDraft({ to, cc, bcc, subject, body }) {
+  /**
+   * @param {{to?: string[], cc?: string[], bcc?: string[], subject: string, body: string,
+   *          attachments?: {name: string, data: Buffer, contentType?: string}[]}} message
+   */
+  async createDraft({ to, cc, bcc, subject, body, attachments = [] }) {
     const draftsId = await this.resolveFolder('drafts');
     const toList = a => (a || []).map(address => ({ name: '', address }));
+    const uploaded = [];
+    for (const file of attachments) {
+      const result = await this.uploadFile(file);
+      uploaded.push({ id: result.id, name: file.name, contentType: file.contentType || 'application/octet-stream' });
+    }
     const result = await this.batch('Mails.create', {
       mails: [{
         folderId: draftsId,
@@ -257,7 +331,8 @@ class KerioClient {
         bcc: toList(bcc),
         isDraft: true,
         plainBody: true,
-        displayableParts: [{ contentType: 'ctTextPlain', content: body }]
+        displayableParts: [{ contentType: 'ctTextPlain', content: body }],
+        attachments: uploaded
       }]
     });
     return result.result[0].id;

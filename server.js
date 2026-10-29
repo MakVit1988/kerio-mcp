@@ -10,13 +10,14 @@ const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio
 const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
 const { KerioClient } = require('./src/kerio-client');
 const { createTools } = require('./src/tools');
+const { createFiles } = require('./src/files');
 
 const client = new KerioClient({
   host: process.env.KERIO_HOST,
   user: process.env.KERIO_USER,
   password: process.env.KERIO_PASSWORD
 });
-const tools = createTools(client);
+const tools = createTools(client, createFiles());
 
 const server = new Server({ name: 'kerio-mcp', version: '1.0.0' }, { capabilities: { tools: {} } });
 
