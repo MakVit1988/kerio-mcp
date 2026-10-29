@@ -112,10 +112,63 @@ function claudeDesktopConfigPaths({ env = process.env, platform = process.platfo
   return [path.join(home, '.config', 'Claude', 'claude_desktop_config.json')];
 }
 
-/** The configs to change: those whose Claude folder exists, or the first one if none does. */
-function pickDesktopConfigs(candidates) {
+const SKIP_DIRS = /^(cache|code cache|gpucache|dawncache|local storage|indexeddb|service worker|blob_storage|session storage|node_modules|logs|crashpad|shared dictionary|network)$/i;
+
+/**
+ * Finds claude_desktop_config.json files below the given folders (a few levels deep).
+ * Newer Claude Desktop builds keep their data outside the usual folders, for example in
+ * %LOCALAPPDATA%\\Claude-Data\\<package>, so the fixed locations are not enough.
+ */
+function scanForDesktopConfigs(roots, { maxDepth = 6, maxEntries = 20000 } = {}) {
+  const found = [];
+  let seen = 0;
+  const walk = (dir, depth) => {
+    if (depth > maxDepth || seen > maxEntries) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      return;
+    }
+    for (const entry of entries) {
+      seen++;
+      const full = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name === 'claude_desktop_config.json') found.push(full);
+      else if (entry.isDirectory() && !SKIP_DIRS.test(entry.name)) walk(full, depth + 1);
+    }
+  };
+  for (const root of roots) walk(root, 0);
+  return found;
+}
+
+/** Folders worth scanning on Windows: everything called Claude* in AppData and in the Store packages. */
+function claudeDataRoots({ env = process.env, platform = process.platform, home = os.homedir() } = {}) {
+  if (platform !== 'win32') return [];
+  const appData = env.APPDATA || path.join(home, 'AppData', 'Roaming');
+  const local = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+  const roots = [];
+  for (const base of [appData, local, path.join(local, 'Packages')]) {
+    try {
+      for (const name of fs.readdirSync(base)) if (/^claude/i.test(name)) roots.push(path.join(base, name));
+    } catch (e) { /* folder does not exist */ }
+  }
+  return roots;
+}
+
+/**
+ * The configs to change: every existing claude_desktop_config.json that was found; otherwise
+ * the known locations whose Claude folder exists; otherwise the first known location.
+ */
+function pickDesktopConfigs(candidates, scanned = []) {
+  const existing = [...new Set([...candidates, ...scanned])].filter(file => fs.existsSync(file));
+  if (existing.length) return existing;
   const present = candidates.filter(file => fs.existsSync(path.dirname(file)));
   return present.length ? present : candidates.slice(0, 1);
+}
+
+/** What the installer uses on a real system. */
+function discoverDesktopConfigs(opts = {}) {
+  return pickDesktopConfigs(claudeDesktopConfigPaths(opts), scanForDesktopConfigs(claudeDataRoots(opts)));
 }
 
 function registerInDesktopConfig(file, { nodeExe, serverJs }) {
@@ -184,7 +237,12 @@ function protectFile(file) {
 function copyApp(source, destination) {
   if (path.resolve(source) === path.resolve(destination)) return;
   fs.rmSync(destination, { recursive: true, force: true });
-  fs.cpSync(source, destination, { recursive: true, filter: file => !/[\\/]\.git([\\/]|$)/.test(file) });
+  // When installing from a repository checkout, leave out what the running server does not need.
+  const skip = new Set(['.git', '.github', 'tests', 'dist', 'coverage']);
+  fs.cpSync(source, destination, {
+    recursive: true,
+    filter: file => !skip.has(path.relative(source, file).split(path.sep)[0])
+  });
 }
 
 function copyNode(installDir) {
@@ -215,7 +273,7 @@ async function install(settings, deps = {}) {
     log = () => {},
     checkLogin = checkLoginDefault,
     appSource = path.resolve(__dirname, '..'),
-    desktopConfigs = pickDesktopConfigs(claudeDesktopConfigPaths()),
+    desktopConfigs = discoverDesktopConfigs(),
     claudeCode = registerInClaudeCode,
     withNode = true
   } = deps;
@@ -265,7 +323,7 @@ async function install(settings, deps = {}) {
 /** Removes the registrations and the install folder. The files folder is kept. */
 function uninstall({ installDir }, deps = {}) {
   const {
-    desktopConfigs = claudeDesktopConfigPaths().filter(file => fs.existsSync(file)),
+    desktopConfigs = [...new Set([...claudeDesktopConfigPaths(), ...scanForDesktopConfigs(claudeDataRoots())])].filter(file => fs.existsSync(file)),
     claudeCodeRemove = unregisterFromClaudeCode
   } = deps;
   const dir = path.resolve(installDir);
@@ -413,7 +471,7 @@ async function main() {
 
 module.exports = {
   parseArgs, normalizeHost, isEmail, defaultInstallDir, defaultFilesDir, claudeDesktopConfigPaths,
-  pickDesktopConfigs, registerInDesktopConfig, unregisterFromDesktopConfig, registerInClaudeCode,
+  pickDesktopConfigs, scanForDesktopConfigs, claudeDataRoots, discoverDesktopConfigs, registerInDesktopConfig, unregisterFromDesktopConfig, registerInClaudeCode,
   unregisterFromClaudeCode, protectFile, install, uninstall, SERVER_NAME
 };
 

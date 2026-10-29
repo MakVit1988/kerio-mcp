@@ -185,3 +185,72 @@ describe('install and uninstall', () => {
     expect(fs.existsSync(path.join(other, 'important.txt'))).toBe(true);
   });
 });
+
+describe('finding the Claude Desktop config on unusual layouts', () => {
+  const win = { platform: 'win32' };
+  let env;
+  beforeEach(() => {
+    env = { APPDATA: path.join(tmp, 'Roaming'), LOCALAPPDATA: path.join(tmp, 'Local') };
+  });
+
+  test('finds the file in Claude-Data\\<package> and updates only that one', () => {
+    const real = path.join(env.LOCALAPPDATA, 'Claude-Data', 'claude_pzs8sxrjxfjjc', 'claude_desktop_config.json');
+    fs.mkdirSync(path.dirname(real), { recursive: true });
+    fs.writeFileSync(real, JSON.stringify({ preferences: { a: 1 } }));
+    fs.mkdirSync(path.join(env.APPDATA, 'Claude'), { recursive: true }); // classic folder without a config
+    expect(setup.discoverDesktopConfigs({ env, home: tmp, ...win })).toEqual([real]);
+  });
+
+  test('registering keeps the existing preferences', () => {
+    const real = path.join(env.LOCALAPPDATA, 'Claude-Data', 'pkg', 'claude_desktop_config.json');
+    fs.mkdirSync(path.dirname(real), { recursive: true });
+    fs.writeFileSync(real, JSON.stringify({ coworkUserFilesPath: 'C:\\Users\\u\\Claude', preferences: { sidebarMode: 'x' } }));
+    const [file] = setup.discoverDesktopConfigs({ env, home: tmp, ...win });
+    setup.registerInDesktopConfig(file, { nodeExe: 'C:\\k\\node.exe', serverJs: 'C:\\k\\server.js' });
+    const data = JSON.parse(fs.readFileSync(real, 'utf8'));
+    expect(data.preferences).toEqual({ sidebarMode: 'x' });
+    expect(data.coworkUserFilesPath).toBe('C:\\Users\\u\\Claude');
+    expect(data.mcpServers['kerio-mail'].command).toBe('C:\\k\\node.exe');
+  });
+
+  test('finds several copies (classic and relocated) and updates all', () => {
+    const a = path.join(env.APPDATA, 'Claude', 'claude_desktop_config.json');
+    const b = path.join(env.LOCALAPPDATA, 'Claude-Data', 'pkg', 'claude_desktop_config.json');
+    for (const f of [a, b]) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '{}'); }
+    expect(setup.discoverDesktopConfigs({ env, home: tmp, ...win }).sort()).toEqual([a, b].sort());
+  });
+
+  test('without any config it falls back to the classic location', () => {
+    fs.mkdirSync(path.join(env.APPDATA, 'Claude'), { recursive: true });
+    expect(setup.discoverDesktopConfigs({ env, home: tmp, ...win })).toEqual([path.join(env.APPDATA, 'Claude', 'claude_desktop_config.json')]);
+  });
+
+  test('the scan ignores cache folders and gives up beyond the depth limit', () => {
+    const cache = path.join(tmp, 'root', 'Cache', 'claude_desktop_config.json');
+    const deep = path.join(tmp, 'root', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'claude_desktop_config.json');
+    const ok = path.join(tmp, 'root', 'a', 'claude_desktop_config.json');
+    for (const f of [cache, deep, ok]) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '{}'); }
+    expect(setup.scanForDesktopConfigs([path.join(tmp, 'root')])).toEqual([ok]);
+  });
+
+  test('claudeDataRoots lists only Claude folders and does nothing outside Windows', () => {
+    fs.mkdirSync(path.join(env.LOCALAPPDATA, 'Claude-Data'), { recursive: true });
+    fs.mkdirSync(path.join(env.LOCALAPPDATA, 'Other'), { recursive: true });
+    fs.mkdirSync(path.join(env.LOCALAPPDATA, 'Packages', 'Claude_pzs8sxrjxfjjc'), { recursive: true });
+    const roots = setup.claudeDataRoots({ env, home: tmp, ...win }).map(r => path.basename(r)).sort();
+    expect(roots).toEqual(['Claude-Data', 'Claude_pzs8sxrjxfjjc']);
+    expect(setup.claudeDataRoots({ env, home: tmp, platform: 'linux' })).toEqual([]);
+  });
+});
+
+test('installing from a repository checkout leaves out tests, dist and git data', async () => {
+  for (const dir of ['tests', 'dist', '.git', '.github', 'src']) {
+    fs.mkdirSync(path.join(appSource, dir), { recursive: true });
+    fs.writeFileSync(path.join(appSource, dir, 'x.txt'), 'x');
+  }
+  const r = await setup.install(
+    { host: 'mail.example.com', user: 'u@example.com', password: 'p', installDir: path.join(tmp, 'I'), filesDir: path.join(tmp, 'F') },
+    { appSource, desktopConfigs: [path.join(tmp, 'c.json')], checkLogin: async () => {}, claudeCode: () => ({ registered: false, reason: 'x' }) }
+  );
+  expect(fs.readdirSync(r.appDir).sort()).toEqual(['config.json', 'installer', 'server.js', 'src']);
+});
