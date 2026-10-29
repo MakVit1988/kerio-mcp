@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "kerio-mail": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": {
+        "KERIO_HOST": "${KERIO_HOST}",
+        "KERIO_USER": "${KERIO_USER}",
+        "KERIO_PASSWORD": "${KERIO_PASSWORD}"
+      }
+    }
+  }
+}

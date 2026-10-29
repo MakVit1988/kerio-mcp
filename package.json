@@ -1,0 +1,21 @@
+{
+  "name": "kerio-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Kerio Connect mailboxes over the web client's HTTPS JSON-RPC API",
+  "main": "server.js",
+  "bin": { "kerio-mcp": "server.js" },
+  "scripts": {
+    "start": "node server.js",
+    "inspect": "npx @modelcontextprotocol/inspector node server.js",
+    "test": "jest"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "dotenv": "^16.5.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
