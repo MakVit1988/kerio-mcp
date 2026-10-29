@@ -41,9 +41,10 @@ MCP-сервер для почтового ящика на **Kerio Connect**. Р
 
 ## Установщик для Windows (самый простой способ)
 
-Для тех, кто не хочет возиться с настройками: готовый пакет `kerio-mcp-installer.zip`. Внутри `install.bat`.
+Для тех, кто не хочет возиться с настройками: готовый пакет `kerio-mcp-installer.zip` лежит на странице
+[Releases](../../releases/latest) этого репозитория (раздел Assets). Внутри `install.bat`.
 
-1. Распаковать архив, дважды щёлкнуть `install.bat`.
+1. Скачать `kerio-mcp-installer.zip`, распаковать, дважды щёлкнуть `install.bat`.
 2. Ответить на вопросы: почта, пароль (не отображается), папка установки, папка для файлов.
 3. Установщик проверит вход в почту, скопирует программу и личную копию `node.exe`, сохранит пароль в
    `config.json` (доступ только у вашей учётной записи Windows) и сам пропишет сервер в **Claude Desktop**
@@ -59,6 +60,14 @@ installer/build.sh mail.example.com     # адрес сервера попадё
 ```
 
 Результат: `dist/kerio-mcp-installer.zip`. Без адреса в команде установщик спросит его у пользователя.
+
+### Как выпустить новую версию
+
+На GitHub: Releases → Draft a new release → новый тег вида `v1.0.1` → Publish. Либо из терминала:
+`git tag v1.0.1 && git push origin v1.0.1`. Workflow `Release installer` сам прогонит тесты, соберёт архив и прикрепит
+его к релизу. Чтобы пакет сразу знал адрес вашего сервера, задайте переменную репозитория `KERIO_DEFAULT_HOST`
+(Settings → Secrets and variables → Actions → Variables). **Только для приватного репозитория**: в публичном
+релиз виден всем, и адрес тоже.
 Для установки без вопросов (администратору): `install.bat --yes --email ivan@example.com --install-dir D --files-dir F`
 и пароль в переменной `KERIO_SETUP_PASSWORD`.
 
