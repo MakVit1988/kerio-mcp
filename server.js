@@ -4,7 +4,10 @@
  *
  * Environment: KERIO_HOST, KERIO_USER, KERIO_PASSWORD (see .env.example).
  */
+const path = require('path');
 const { loadConfigFile } = require('./src/config');
+// Settings, in order of priority: environment, .env next to server.js, .env in the working directory, config.json.
+require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true });
 require('dotenv').config({ quiet: true });
 loadConfigFile(__dirname);
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
@@ -21,7 +24,7 @@ const client = new KerioClient({
 });
 const tools = createTools(client, createFiles());
 
-const server = new Server({ name: 'kerio-mcp', version: '1.0.0' }, { capabilities: { tools: {} } });
+const server = new Server({ name: 'kerio-mcp', version: require('./package.json').version }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))
