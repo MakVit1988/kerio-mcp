@@ -4,7 +4,9 @@
  *
  * Environment: KERIO_HOST, KERIO_USER, KERIO_PASSWORD (see .env.example).
  */
+const { loadConfigFile } = require('./src/config');
 require('dotenv').config({ quiet: true });
+loadConfigFile(__dirname);
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
