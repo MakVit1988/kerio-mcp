@@ -321,18 +321,39 @@ async function install(settings, deps = {}) {
 }
 
 /** Removes the registrations and the install folder. The files folder is kept. */
+/** True when the folder holds (at least a leftover of) an installation made by this installer. */
+function looksInstalled(dir) {
+  return ['app/server.js', 'app/config.json', 'node/node.exe', 'node/node', 'uninstall.bat']
+    .some(file => fs.existsSync(path.join(dir, file)));
+}
+
 function uninstall({ installDir }, deps = {}) {
   const {
     desktopConfigs = [...new Set([...claudeDesktopConfigPaths(), ...scanForDesktopConfigs(claudeDataRoots())])].filter(file => fs.existsSync(file)),
     claudeCodeRemove = unregisterFromClaudeCode
   } = deps;
   const dir = path.resolve(installDir);
-  if (!fs.existsSync(path.join(dir, 'app', 'server.js'))) {
+  if (!looksInstalled(dir)) {
     throw new Error(`В ${dir} не найдена установка kerio-mcp, ничего не удалено.`);
   }
   const removedFrom = desktopConfigs.filter(file => unregisterFromDesktopConfig(file));
   const codeRemoved = claudeCodeRemove();
-  fs.rmSync(dir, { recursive: true, force: true });
+
+  // Windows will not delete a folder that is some process's current directory, so step out of it first.
+  try { process.chdir(os.tmpdir()); } catch (e) { /* best effort */ }
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  } catch (error) {
+    const failure = new Error(
+      `Настройки Claude уже очищены, но папку ${dir} удалить не удалось (${error.code || error.message}). ` +
+      'Закройте Claude Desktop полностью (значок в трее -> Выход) и все окна, открытые в этой папке, затем удалите папку ' +
+      'вручную в Проводнике или запустите uninstall.bat ещё раз.'
+    );
+    failure.code = error.code;
+    failure.removedFrom = removedFrom;
+    failure.codeRemoved = codeRemoved;
+    throw failure;
+  }
   return { removedFrom, codeRemoved, installDir: dir };
 }
 

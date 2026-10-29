@@ -254,3 +254,53 @@ test('installing from a repository checkout leaves out tests, dist and git data'
   );
   expect(fs.readdirSync(r.appDir).sort()).toEqual(['config.json', 'installer', 'server.js', 'src']);
 });
+
+describe('uninstall when the folder cannot be deleted', () => {
+  const settings = () => ({
+    host: 'mail.example.com', user: 'u@example.com', password: 'p',
+    installDir: path.join(tmp, 'Inst'), filesDir: path.join(tmp, 'Files')
+  });
+  const deps = () => ({
+    appSource, desktopConfigs: [path.join(tmp, 'Claude', 'claude_desktop_config.json')],
+    checkLogin: async () => {}, claudeCode: () => ({ registered: false, reason: 'x' })
+  });
+
+  test('explains what to do, and the Claude entries are already gone', async () => {
+    const d = deps();
+    const r = await setup.install(settings(), d);
+    const rm = jest.spyOn(fs, 'rmSync').mockImplementation(() => { const e = new Error('denied'); e.code = 'EPERM'; throw e; });
+    let caught;
+    try {
+      setup.uninstall({ installDir: r.installDir }, { desktopConfigs: d.desktopConfigs, claudeCodeRemove: () => true });
+    } catch (error) { caught = error; }
+    rm.mockRestore();
+    expect(caught.message).toMatch(/Настройки Claude уже очищены/);
+    expect(caught.message).toMatch(/Выход/);
+    expect(caught.code).toBe('EPERM');
+    expect(JSON.parse(fs.readFileSync(d.desktopConfigs[0], 'utf8')).mcpServers).toEqual({});
+    expect(fs.existsSync(r.installDir)).toBe(true);
+  });
+
+  test('a second run finishes the job on a half-removed folder', async () => {
+    const d = deps();
+    const r = await setup.install(settings(), d);
+    fs.rmSync(path.join(r.installDir, 'app'), { recursive: true }); // what is left after a failed attempt
+    const result = setup.uninstall({ installDir: r.installDir }, { desktopConfigs: d.desktopConfigs, claudeCodeRemove: () => false });
+    expect(result.installDir).toBe(r.installDir);
+    expect(fs.existsSync(r.installDir)).toBe(false);
+  });
+
+  test('leaves the process outside the install folder before deleting it', async () => {
+    const d = deps();
+    const r = await setup.install(settings(), d);
+    const before = process.cwd();
+    process.chdir(r.installDir);
+    try {
+      setup.uninstall({ installDir: r.installDir }, { desktopConfigs: d.desktopConfigs, claudeCodeRemove: () => false });
+      expect(fs.realpathSync(process.cwd())).not.toBe(fs.realpathSync(path.dirname(r.installDir)) + path.sep + 'Inst');
+    } finally {
+      process.chdir(before);
+    }
+    expect(fs.existsSync(r.installDir)).toBe(false);
+  });
+});
