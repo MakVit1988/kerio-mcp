@@ -19,8 +19,9 @@ const tool = (client, name) => createTools(client).find(t => t.name === name);
 test('exposes the expected tools', () => {
   const names = createTools(fakeClient()).map(t => t.name).sort();
   expect(names).toEqual([
-    'create-folder', 'delete-email', 'download-attachment', 'draft-email', 'flag-email', 'list-emails', 'list-files', 'list-folders',
-    'mark-as-read', 'move-emails', 'read-email', 'search-emails', 'send-email'
+    'check-availability', 'create-event', 'create-folder', 'delete-email', 'delete-event', 'download-attachment', 'draft-email',
+    'find-meeting-time', 'flag-email', 'list-emails', 'list-events', 'list-files', 'list-folders', 'list-invitations',
+    'mark-as-read', 'move-emails', 'read-email', 'read-event', 'respond-to-invitation', 'search-emails', 'send-email', 'update-event'
   ]);
 });
 
